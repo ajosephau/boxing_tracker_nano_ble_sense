@@ -33,6 +33,13 @@ limitations under the License.
 
 #define BLE_SENSE_UUID(val) ("4798e0f2-" val "-4d68-af64-838352588e8e")
 
+#define SIDE_L "L"    // Left
+#define SIDE_C "C"    // Centre
+#define SIDE_R "R"    // Right
+
+#define SIDE SIDE_R
+#define BLE_DEVICE_NAME(side) ("BoxingTracker-" side "-")
+
 namespace {
 
   const int VERSION = 0x00000000;
@@ -97,7 +104,7 @@ void setup() {
 
   address.toUpperCase();
 
-  name = "BLESense-";
+  name = BLE_DEVICE_NAME(SIDE);
   name += address[address.length() - 5];
   name += address[address.length() - 4];
   name += address[address.length() - 2];
