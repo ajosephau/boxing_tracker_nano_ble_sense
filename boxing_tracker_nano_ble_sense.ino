@@ -185,6 +185,29 @@ void setup() {
 
 }
 
+void setLedPinValue(int pin, int value) {
+  // RGB LED's are pulled up, so the PWM needs to be inverted
+
+  if (value == 0) {
+    // special hack to clear LED
+    analogWrite(pin, 256);
+  } else {
+    analogWrite(pin, 255 - value);
+  }
+}
+
+void set_led_ble_disconnected(void) {
+  setLedPinValue(LEDR, 255);
+  setLedPinValue(LEDG, 0);
+  setLedPinValue(LEDB, 0);
+}
+
+void set_led_ble_connected(void) {
+  setLedPinValue(LEDR, 0);
+  setLedPinValue(LEDG, 255);
+  setLedPinValue(LEDB, 0);
+}
+
 void loop() {
   BLEDevice central = BLE.central();
   
@@ -195,7 +218,17 @@ void loop() {
     // print the central's BT address:
     Serial.println(central.address());
   }
+  else {
+  }
   was_connected_last = central;
+
+  if (central && central.connected()) {
+    set_led_ble_connected();
+  }
+  else {
+    set_led_ble_disconnected();    
+  }
+
 
   // make sure IMU data is available then read in data
   const bool data_available = IMU.accelerationAvailable() || IMU.gyroscopeAvailable();
