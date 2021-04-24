@@ -105,10 +105,10 @@ void setup() {
   address.toUpperCase();
 
   name = BLE_DEVICE_NAME(SIDE);
-  name += address[address.length() - 5];
-  name += address[address.length() - 4];
   name += address[address.length() - 2];
   name += address[address.length() - 1];
+  name += address[address.length() - 5];
+  name += address[address.length() - 4];
 
   Serial.print("name = ");
   Serial.println(name);
