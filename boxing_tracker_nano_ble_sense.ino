@@ -18,6 +18,7 @@ limitations under the License.
 //Havrard_TinyMLx Arudino library version 0.1.0
 
 // https://github.com/arduino/ArduinoAI/blob/master/BLESense-test-dashboard/BLESense/BLESense.ino
+#include <stdlib.h>
 
 #include <TensorFlowLite.h>
 
@@ -79,9 +80,16 @@ namespace {
 
 }  // namespace
 
+bool found_logger = false;
+BLECharacteristic dataPeripheralCharacteristic;
+BLECharacteristic strokePeripheralCharacteristic;
+BLEDevice peripheral;
+BLEDevice central;
+
 void setup() {
   // Start serial
-  Serial.begin(9600);
+  Serial.begin(115200);
+  // while (!Serial) {}
   Serial.println("Started");
 
   // Start IMU
@@ -125,6 +133,8 @@ void setup() {
   BLE.addService(service);
   BLE.advertise();
 
+  // start scanning for peripherals
+  BLE.scan();
 
   // Set up logging. Google style is to avoid globals or statics because of
   // lifetime uncertainty, but since this has a trivial destructor it's okay.
@@ -209,7 +219,31 @@ void set_led_ble_connected(void) {
 }
 
 void loop() {
-  BLEDevice central = BLE.central();
+  central = BLE.central();
+
+  // check if a peripheral has been discovered
+  peripheral = BLE.available();
+
+  if (peripheral) {
+    // discovered a peripheral, print out address, local name, and advertised service
+    Serial.print("Found ");
+    Serial.print(peripheral.address());
+    Serial.print(" '");
+    Serial.print(peripheral.localName());
+    Serial.print("' ");
+    Serial.print(peripheral.advertisedServiceUuid());
+    Serial.println();
+
+    if (peripheral.localName() == "BoxingTrackerServer") {
+      found_logger = true;
+      BLE.stopScan();
+      peripheral.connect();
+      peripheral.discoverAttributes();
+      BLEService service = peripheral.service("e7cdff01-8262-4851-847d-cd1961238f47");
+      dataPeripheralCharacteristic = service.characteristic("e7cdff02-8262-4851-847d-cd1961238f47");
+      strokePeripheralCharacteristic = service.characteristic("e7cdff03-8262-4851-847d-cd1961238f47");
+    }
+  }
   
   // if a central is connected to the peripheral:
   static bool was_connected_last = false;  
@@ -222,7 +256,7 @@ void loop() {
   }
   was_connected_last = central;
 
-  if (central && central.connected()) {
+  if (found_logger) {
     set_led_ble_connected();
   }
   else {
@@ -238,7 +272,7 @@ void loop() {
   int accelerometer_samples_read;
   int gyroscope_samples_read;
 
-  if (accelerationCharacteristic.subscribed() && IMU.accelerationAvailable()) {
+  if (IMU.accelerationAvailable()) {
     float x, y, z;
 
     IMU.readAcceleration(x, y, z);
@@ -246,9 +280,19 @@ void loop() {
     float acceleration[3] = { x, y, z };
 
     accelerationCharacteristic.writeValue(acceleration, sizeof(acceleration));
+    if (found_logger) {
+      String val = "accel,";
+      val.concat(x);
+      val.concat(",");
+      val.concat(y);
+      val.concat(",");
+      val.concat(z);
+      val.concat("\n");
+      dataPeripheralCharacteristic.writeValue(val.c_str());
+    }
   }
 
-  if (gyroscopeCharacteristic.subscribed() && IMU.gyroscopeAvailable()) {
+  if (IMU.gyroscopeAvailable()) {
     float x, y, z;
 
     IMU.readGyroscope(x, y, z);
@@ -256,9 +300,19 @@ void loop() {
     float dps[3] = { x, y, z };
 
     gyroscopeCharacteristic.writeValue(dps, sizeof(dps));
+    if (found_logger) {
+      String val = "gyro,";
+      val.concat(x);
+      val.concat(",");
+      val.concat(y);
+      val.concat(",");
+      val.concat(z);
+      val.concat("\n");
+      dataPeripheralCharacteristic.writeValue(val.c_str());
+    }
   }
 
-  if (magneticFieldCharacteristic.subscribed() && IMU.magneticFieldAvailable()) {
+  if (IMU.magneticFieldAvailable()) {
     float x, y, z;
 
     IMU.readMagneticField(x, y, z);
@@ -266,8 +320,24 @@ void loop() {
     float magneticField[3] = { x, y, z };
 
     magneticFieldCharacteristic.writeValue(magneticField, sizeof(magneticField));
+    if (found_logger) {
+      String val = "mag,";
+      val.concat(x);
+      val.concat(",");
+      val.concat(y);
+      val.concat(",");
+      val.concat(z);
+      val.concat("\n");
+      dataPeripheralCharacteristic.writeValue(val.c_str());
+    }
   }  
-  
+
+  if (found_logger) {
+    String val = "rssi,";
+    val.concat(BLE.rssi());
+    dataPeripheralCharacteristic.writeValue(val.c_str());
+  }
+
   ReadAccelerometerAndGyroscope(&accelerometer_samples_read, &gyroscope_samples_read);
 
   // Parse and process IMU data
@@ -278,6 +348,9 @@ void loop() {
     UpdateStroke(gyroscope_samples_read, &done_just_triggered);
     if (central && central.connected()) {
       strokeCharacteristic.writeValue(stroke_struct_buffer, stroke_struct_byte_count);
+    }
+    if(found_logger) {
+      strokePeripheralCharacteristic.writeValue(stroke_struct_buffer, stroke_struct_byte_count);
     }
   }
   if (accelerometer_samples_read > 0) {
