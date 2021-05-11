@@ -78,13 +78,14 @@ namespace {
   constexpr int label_count = 10;
   const char* labels[label_count] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
 
-}  // namespace
+  bool found_logger = false;
+  BLECharacteristic dataPeripheralCharacteristic;
+  BLECharacteristic strokePeripheralCharacteristic;
+  BLEDevice peripheral;
+  BLEDevice central;
 
-bool found_logger = false;
-BLECharacteristic dataPeripheralCharacteristic;
-BLECharacteristic strokePeripheralCharacteristic;
-BLEDevice peripheral;
-BLEDevice central;
+  int wheel_colour = 0;
+}  // namespace
 
 void setup() {
   // Start serial
@@ -213,9 +214,31 @@ void set_led_ble_disconnected(void) {
 }
 
 void set_led_ble_connected(void) {
-  setLedPinValue(LEDR, 0);
-  setLedPinValue(LEDG, 255);
-  setLedPinValue(LEDB, 0);
+  wheel_colour = wheel_colour + 2;
+  if(wheel_colour > 255) { 
+    wheel_colour = 0;
+  }
+  set_led_colour(wheel_colour);
+}
+
+void set_led_colour(int wheel_colour) {
+  if(wheel_colour < 85) {
+    setLedPinValue(LEDR, wheel_colour * 3);
+    setLedPinValue(LEDG, 255 - wheel_colour * 3);
+    setLedPinValue(LEDB, 0);
+  } 
+  else if(wheel_colour < 170) {
+    wheel_colour -= 85;
+    setLedPinValue(LEDR, 255 - wheel_colour * 3);
+    setLedPinValue(LEDG, 0);
+    setLedPinValue(LEDB, wheel_colour * 3);
+  } 
+  else {
+    wheel_colour -= 170;
+    setLedPinValue(LEDR, 0);
+    setLedPinValue(LEDG, wheel_colour * 3);
+    setLedPinValue(LEDB, 255 - wheel_colour * 3);
+  }
 }
 
 void loop() {
@@ -335,6 +358,7 @@ void loop() {
   if (found_logger) {
     String val = "rssi,";
     val.concat(BLE.rssi());
+    val.concat("\n");
     dataPeripheralCharacteristic.writeValue(val.c_str());
   }
 
@@ -358,51 +382,51 @@ void loop() {
     UpdateVelocity(accelerometer_samples_read, current_gravity);
   }
 
-  // Wait for a gesture to be done
-  if (done_just_triggered) {
-    // Rasterize the gesture
-    RasterizeStroke(stroke_points, *stroke_transmit_length, 0.6f, 0.6f, raster_width, raster_height, raster_buffer);
-    for (int y = 0; y < raster_height; ++y) {
-      char line[raster_width + 1];
-      for (int x = 0; x < raster_width; ++x) {
-        const int8_t* pixel = &raster_buffer[(y * raster_width * raster_channels) + (x * raster_channels)];
-        const int8_t red = pixel[0];
-        const int8_t green = pixel[1];
-        const int8_t blue = pixel[2];
-        char output;
-        if ((red > -128) || (green > -128) || (blue > -128)) {
-          output = '#';
-        } else {
-          output = '.';
-        }
-        line[x] = output;
-      }
-      line[raster_width] = 0;
-      Serial.println(line);
-    }
+  // // Wait for a gesture to be done
+  // if (done_just_triggered) {
+  //   // Rasterize the gesture
+  //   RasterizeStroke(stroke_points, *stroke_transmit_length, 0.6f, 0.6f, raster_width, raster_height, raster_buffer);
+  //   for (int y = 0; y < raster_height; ++y) {
+  //     char line[raster_width + 1];
+  //     for (int x = 0; x < raster_width; ++x) {
+  //       const int8_t* pixel = &raster_buffer[(y * raster_width * raster_channels) + (x * raster_channels)];
+  //       const int8_t red = pixel[0];
+  //       const int8_t green = pixel[1];
+  //       const int8_t blue = pixel[2];
+  //       char output;
+  //       if ((red > -128) || (green > -128) || (blue > -128)) {
+  //         output = '#';
+  //       } else {
+  //         output = '.';
+  //       }
+  //       line[x] = output;
+  //     }
+  //     line[raster_width] = 0;
+  //     Serial.println(line);
+  //   }
 
-    // Pass to the model and run the interpreter
-    TfLiteTensor* model_input = interpreter->input(0);
-    for (int i = 0; i < raster_byte_count; ++i) {
-      model_input->data.int8[i] = raster_buffer[i];
-    }
-    TfLiteStatus invoke_status = interpreter->Invoke();
-    if (invoke_status != kTfLiteOk) {
-      TF_LITE_REPORT_ERROR(error_reporter, "Invoke failed");
-      return;
-    }
-    TfLiteTensor* output = interpreter->output(0);
+  //   // Pass to the model and run the interpreter
+  //   TfLiteTensor* model_input = interpreter->input(0);
+  //   for (int i = 0; i < raster_byte_count; ++i) {
+  //     model_input->data.int8[i] = raster_buffer[i];
+  //   }
+  //   TfLiteStatus invoke_status = interpreter->Invoke();
+  //   if (invoke_status != kTfLiteOk) {
+  //     TF_LITE_REPORT_ERROR(error_reporter, "Invoke failed");
+  //     return;
+  //   }
+  //   TfLiteTensor* output = interpreter->output(0);
 
-    // Parse the model output
-    int8_t max_score;
-    int max_index;
-    for (int i = 0; i < label_count; ++i) {
-      const int8_t score = output->data.int8[i];
-      if ((i == 0) || (score > max_score)) {
-        max_score = score;
-        max_index = i;
-      }
-    }
-    TF_LITE_REPORT_ERROR(error_reporter, "Found %s (%d)", labels[max_index], max_score);
-  }
+  //   // Parse the model output
+  //   int8_t max_score;
+  //   int max_index;
+  //   for (int i = 0; i < label_count; ++i) {
+  //     const int8_t score = output->data.int8[i];
+  //     if ((i == 0) || (score > max_score)) {
+  //       max_score = score;
+  //       max_index = i;
+  //     }
+  //   }
+  //   TF_LITE_REPORT_ERROR(error_reporter, "Found %s (%d)", labels[max_index], max_score);
+  // }
 }
