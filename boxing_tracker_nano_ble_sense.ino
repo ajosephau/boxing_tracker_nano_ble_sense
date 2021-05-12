@@ -137,63 +137,62 @@ void setup() {
   // start scanning for peripherals
   BLE.scan();
 
-  // Set up logging. Google style is to avoid globals or statics because of
-  // lifetime uncertainty, but since this has a trivial destructor it's okay.
-  static tflite::MicroErrorReporter micro_error_reporter;  // NOLINT
-  error_reporter = &micro_error_reporter;
+  // // Set up logging. Google style is to avoid globals or statics because of
+  // // lifetime uncertainty, but since this has a trivial destructor it's okay.
+  // static tflite::MicroErrorReporter micro_error_reporter;  // NOLINT
+  // error_reporter = &micro_error_reporter;
 
-  // Map the model into a usable data structure. This doesn't involve any
-  // copying or parsing, it's a very lightweight operation.
-  model = tflite::GetModel(g_magic_wand_model_data);
-  if (model->version() != TFLITE_SCHEMA_VERSION) {
-    TF_LITE_REPORT_ERROR(error_reporter,
-                         "Model provided is schema version %d not equal "
-                         "to supported version %d.",
-                         model->version(), TFLITE_SCHEMA_VERSION);
-    return;
-  }
+  // // Map the model into a usable data structure. This doesn't involve any
+  // // copying or parsing, it's a very lightweight operation.
+  // model = tflite::GetModel(g_magic_wand_model_data);
+  // if (model->version() != TFLITE_SCHEMA_VERSION) {
+  //   TF_LITE_REPORT_ERROR(error_reporter,
+  //                        "Model provided is schema version %d not equal "
+  //                        "to supported version %d.",
+  //                        model->version(), TFLITE_SCHEMA_VERSION);
+  //   return;
+  // }
 
-  // Pull in only the operation implementations we need.
-  // This relies on a complete list of all the ops needed by this graph.
-  // An easier approach is to just use the AllOpsResolver, but this will
-  // incur some penalty in code space for op implementations that are not
-  // needed by this graph.
-  static tflite::MicroMutableOpResolver<4> micro_op_resolver;  // NOLINT
-  micro_op_resolver.AddConv2D();
-  micro_op_resolver.AddMean();
-  micro_op_resolver.AddFullyConnected();
-  micro_op_resolver.AddSoftmax();
+  // // Pull in only the operation implementations we need.
+  // // This relies on a complete list of all the ops needed by this graph.
+  // // An easier approach is to just use the AllOpsResolver, but this will
+  // // incur some penalty in code space for op implementations that are not
+  // // needed by this graph.
+  // static tflite::MicroMutableOpResolver<4> micro_op_resolver;  // NOLINT
+  // micro_op_resolver.AddConv2D();
+  // micro_op_resolver.AddMean();
+  // micro_op_resolver.AddFullyConnected();
+  // micro_op_resolver.AddSoftmax();
 
-  // Build an interpreter to run the model with.
-  static tflite::MicroInterpreter static_interpreter(
-      model, micro_op_resolver, tensor_arena, kTensorArenaSize, error_reporter);
-  interpreter = &static_interpreter;
+  // // Build an interpreter to run the model with.
+  // static tflite::MicroInterpreter static_interpreter(
+  //     model, micro_op_resolver, tensor_arena, kTensorArenaSize, error_reporter);
+  // interpreter = &static_interpreter;
 
-  // Allocate memory from the tensor_arena for the model's tensors.
-  interpreter->AllocateTensors();
+  // // Allocate memory from the tensor_arena for the model's tensors.
+  // interpreter->AllocateTensors();
 
-  // Set model input settings
-  TfLiteTensor* model_input = interpreter->input(0);
-  if ((model_input->dims->size != 4) || (model_input->dims->data[0] != 1) ||
-      (model_input->dims->data[1] != raster_height) ||
-      (model_input->dims->data[2] != raster_width) ||
-      (model_input->dims->data[3] != raster_channels) ||
-      (model_input->type != kTfLiteInt8)) {
-    TF_LITE_REPORT_ERROR(error_reporter,
-                         "Bad input tensor parameters in model");
-    return;
-  }
+  // // Set model input settings
+  // TfLiteTensor* model_input = interpreter->input(0);
+  // if ((model_input->dims->size != 4) || (model_input->dims->data[0] != 1) ||
+  //     (model_input->dims->data[1] != raster_height) ||
+  //     (model_input->dims->data[2] != raster_width) ||
+  //     (model_input->dims->data[3] != raster_channels) ||
+  //     (model_input->type != kTfLiteInt8)) {
+  //   TF_LITE_REPORT_ERROR(error_reporter,
+  //                        "Bad input tensor parameters in model");
+  //   return;
+  // }
 
-  // Set model output settings
-  TfLiteTensor* model_output = interpreter->output(0);
-  if ((model_output->dims->size != 2) || (model_output->dims->data[0] != 1) ||
-      (model_output->dims->data[1] != label_count) ||
-      (model_output->type != kTfLiteInt8)) {
-    TF_LITE_REPORT_ERROR(error_reporter,
-                         "Bad output tensor parameters in model");
-    return;
-  }
-
+  // // Set model output settings
+  // TfLiteTensor* model_output = interpreter->output(0);
+  // if ((model_output->dims->size != 2) || (model_output->dims->data[0] != 1) ||
+  //     (model_output->dims->data[1] != label_count) ||
+  //     (model_output->type != kTfLiteInt8)) {
+  //   TF_LITE_REPORT_ERROR(error_reporter,
+  //                        "Bad output tensor parameters in model");
+  //   return;
+  // }
 }
 
 void setLedPinValue(int pin, int value) {
@@ -257,7 +256,7 @@ void loop() {
     Serial.print(peripheral.advertisedServiceUuid());
     Serial.println();
 
-    if (peripheral.localName() == "BoxingTrackerServer") {
+    if (peripheral.localName().startsWith("BoxingTrackerServer")) {
       found_logger = true;
       BLE.stopScan();
       peripheral.connect();
@@ -355,13 +354,6 @@ void loop() {
     }
   }  
 
-  if (found_logger) {
-    String val = "rssi,";
-    val.concat(BLE.rssi());
-    val.concat("\n");
-    dataPeripheralCharacteristic.writeValue(val.c_str());
-  }
-
   ReadAccelerometerAndGyroscope(&accelerometer_samples_read, &gyroscope_samples_read);
 
   // Parse and process IMU data
@@ -377,10 +369,10 @@ void loop() {
       strokePeripheralCharacteristic.writeValue(stroke_struct_buffer, stroke_struct_byte_count);
     }
   }
-  if (accelerometer_samples_read > 0) {
-    EstimateGravityDirection(current_gravity);
-    UpdateVelocity(accelerometer_samples_read, current_gravity);
-  }
+  // if (accelerometer_samples_read > 0) {
+  //   EstimateGravityDirection(current_gravity);
+  //   UpdateVelocity(accelerometer_samples_read, current_gravity);
+  // }
 
   // // Wait for a gesture to be done
   // if (done_just_triggered) {
