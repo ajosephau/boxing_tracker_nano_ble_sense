@@ -79,6 +79,7 @@ namespace {
   const char* labels[label_count] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
 
   bool found_logger = false;
+  bool scan_started = false;
   BLECharacteristic dataPeripheralCharacteristic;
   BLECharacteristic strokePeripheralCharacteristic;
   BLEDevice peripheral;
@@ -136,6 +137,7 @@ void setup() {
 
   // start scanning for peripherals
   BLE.scan();
+  scan_started = true;
 
   // // Set up logging. Google style is to avoid globals or statics because of
   // // lifetime uncertainty, but since this has a trivial destructor it's okay.
@@ -243,10 +245,14 @@ void set_led_colour(int wheel_colour) {
 void loop() {
   central = BLE.central();
 
+  if (!found_logger && !scan_started) {
+      BLE.scan();
+      scan_started = true;
+  }
   // check if a peripheral has been discovered
   peripheral = BLE.available();
 
-  if (peripheral) {
+  if (peripheral || !found_logger) {
     // discovered a peripheral, print out address, local name, and advertised service
     Serial.print("Found ");
     Serial.print(peripheral.address());
@@ -259,6 +265,7 @@ void loop() {
     if (peripheral.localName().startsWith("BoxingTrackerServer")) {
       found_logger = true;
       BLE.stopScan();
+      scan_started = false;
       peripheral.connect();
       peripheral.discoverAttributes();
       BLEService service = peripheral.service("e7cdff01-8262-4851-847d-cd1961238f47");
@@ -310,7 +317,9 @@ void loop() {
       val.concat(",");
       val.concat(z);
       val.concat("\n");
-      dataPeripheralCharacteristic.writeValue(val.c_str());
+      if(!dataPeripheralCharacteristic.writeValue(val.c_str())) {
+        found_logger = false;
+      }
     }
   }
 
@@ -330,7 +339,9 @@ void loop() {
       val.concat(",");
       val.concat(z);
       val.concat("\n");
-      dataPeripheralCharacteristic.writeValue(val.c_str());
+      if(!dataPeripheralCharacteristic.writeValue(val.c_str())) {
+        found_logger = false;
+      }
     }
   }
 
@@ -350,7 +361,9 @@ void loop() {
       val.concat(",");
       val.concat(z);
       val.concat("\n");
-      dataPeripheralCharacteristic.writeValue(val.c_str());
+      if(!dataPeripheralCharacteristic.writeValue(val.c_str())) {
+        found_logger = false;
+      }
     }
   }  
 
@@ -366,7 +379,9 @@ void loop() {
       strokeCharacteristic.writeValue(stroke_struct_buffer, stroke_struct_byte_count);
     }
     if(found_logger) {
-      strokePeripheralCharacteristic.writeValue(stroke_struct_buffer, stroke_struct_byte_count);
+      if(!strokePeripheralCharacteristic.writeValue(stroke_struct_buffer, stroke_struct_byte_count)) {
+        found_logger = false;
+      }
     }
   }
   // if (accelerometer_samples_read > 0) {
