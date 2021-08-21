@@ -27,6 +27,7 @@ limitations under the License.
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/version.h"
+#include <Arduino_KNN.h>
 
 #include "magic_wand_model_data.h"
 #include "rasterize_stroke.h"
@@ -40,6 +41,34 @@ limitations under the License.
 
 #define SIDE SIDE_R
 #define BLE_DEVICE_NAME(side) ("BoxingTracker-" side "-")
+
+const int NUM_BOARD_ORIENTATIONS = 3;
+const String BOARD_ORIENTATIONS[NUM_BOARD_ORIENTATIONS] = {
+  "unknown",
+  "guard",            // guard
+  "not guard",        // not guard
+};
+
+const int NUM_ORIENTATIONS_SAMPLES = 12;
+
+const float ORIENTATIONS[NUM_ORIENTATIONS_SAMPLES][4] = {
+  {-0.00, -1.00, 0.14, 1}, 
+  {-0.16, -0.98, 0.12, 1}, 
+  {-0.43, -0.90, 0.13, 2}, 
+  {-0.67, -0.68, 0.23, 2}, 
+  {-0.72, -0.72, 0.08, 2}, 
+  {-0.86, -0.61, 0.05, 2}, 
+  {-0.75, -0.69, -0.11, 2}, 
+  {-0.91, -0.38, 0.17, 2}, 
+  {-0.75, -0.66, 0.18, 2}, 
+  {-0.47, -0.88, 0.06, 1}, 
+  {-0.27, -0.97, -0.00, 1}, 
+  {-0.70, -0.74, 0.04, 2}
+};
+
+int current_orientation=0;
+
+KNNClassifier guard_knn(3);
 
 namespace {
 
@@ -58,7 +87,12 @@ namespace {
   BLECharacteristic accelerationCharacteristic    (BLE_SENSE_UUID("3001"), BLENotify, 3 * sizeof(float)); // Array of 3 floats, G
   BLECharacteristic gyroscopeCharacteristic       (BLE_SENSE_UUID("3002"), BLENotify, 3 * sizeof(float)); // Array of 3 floats, dps
   BLECharacteristic magneticFieldCharacteristic   (BLE_SENSE_UUID("3003"), BLENotify, 3 * sizeof(float)); // Array of 3 floats, uT
-
+  BLECharacteristic punchTypeCharacteristic       (BLE_SENSE_UUID("3004"), BLENotify, sizeof(int)); // 1 int, enum
+  BLECharacteristic punchScoreCharacteristic      (BLE_SENSE_UUID("3005"), BLENotify, sizeof(float)); // 1 float, float
+  BLECharacteristic guardCharacteristic           (BLE_SENSE_UUID("3006"), BLENotify, sizeof(int)); // 1 int, enum
+  BLECharacteristic otherPunchTypeCharacteristic  (BLE_SENSE_UUID("3007"), BLENotify, sizeof(int)); // 1 int, enum
+  BLECharacteristic otherGuardCharacteristic      (BLE_SENSE_UUID("3008"), BLENotify, sizeof(int)); // 1 int, enum
+  BLECharacteristic actionCharacteristic          (BLE_SENSE_UUID("3009"), BLENotify, sizeof(int)); // 1 int, enum
   // String to calculate the local and device name
   String name;
   
@@ -75,8 +109,8 @@ namespace {
   // -------------------------------------------------------------------------------- //
   // UPDATE THESE VARIABLES TO MATCH THE NUMBER AND LIST OF GESTURES IN YOUR DATASET  //
   // -------------------------------------------------------------------------------- //
-  constexpr int label_count = 10;
-  const char* labels[label_count] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+  constexpr int label_count = 4;
+  const char* labels[label_count] = {"bodyshot", "jab", "hook", "upper"};
 
   bool found_logger = false;
   bool scan_started = false;
@@ -131,6 +165,12 @@ void setup() {
   service.addCharacteristic(accelerationCharacteristic);
   service.addCharacteristic(gyroscopeCharacteristic);
   service.addCharacteristic(magneticFieldCharacteristic);
+  service.addCharacteristic(punchTypeCharacteristic);
+  service.addCharacteristic(punchScoreCharacteristic);
+  service.addCharacteristic(guardCharacteristic);
+  service.addCharacteristic(otherPunchTypeCharacteristic);
+  service.addCharacteristic(otherGuardCharacteristic);
+  service.addCharacteristic(actionCharacteristic);
   
   BLE.addService(service);
   BLE.advertise();
@@ -139,62 +179,73 @@ void setup() {
   BLE.scan();
   scan_started = true;
 
-  // // Set up logging. Google style is to avoid globals or statics because of
-  // // lifetime uncertainty, but since this has a trivial destructor it's okay.
-  // static tflite::MicroErrorReporter micro_error_reporter;  // NOLINT
-  // error_reporter = &micro_error_reporter;
+  // Set up logging. Google style is to avoid globals or statics because of
+  // lifetime uncertainty, but since this has a trivial destructor it's okay.
+  static tflite::MicroErrorReporter micro_error_reporter;  // NOLINT
+  error_reporter = &micro_error_reporter;
 
-  // // Map the model into a usable data structure. This doesn't involve any
-  // // copying or parsing, it's a very lightweight operation.
-  // model = tflite::GetModel(g_magic_wand_model_data);
-  // if (model->version() != TFLITE_SCHEMA_VERSION) {
-  //   TF_LITE_REPORT_ERROR(error_reporter,
-  //                        "Model provided is schema version %d not equal "
-  //                        "to supported version %d.",
-  //                        model->version(), TFLITE_SCHEMA_VERSION);
-  //   return;
-  // }
+  // Map the model into a usable data structure. This doesn't involve any
+  // copying or parsing, it's a very lightweight operation.
+  model = tflite::GetModel(g_magic_wand_model_data);
+  if (model->version() != TFLITE_SCHEMA_VERSION) {
+    TF_LITE_REPORT_ERROR(error_reporter,
+                         "Model provided is schema version %d not equal "
+                         "to supported version %d.",
+                         model->version(), TFLITE_SCHEMA_VERSION);
+    return;
+  }
 
-  // // Pull in only the operation implementations we need.
-  // // This relies on a complete list of all the ops needed by this graph.
-  // // An easier approach is to just use the AllOpsResolver, but this will
-  // // incur some penalty in code space for op implementations that are not
-  // // needed by this graph.
-  // static tflite::MicroMutableOpResolver<4> micro_op_resolver;  // NOLINT
-  // micro_op_resolver.AddConv2D();
-  // micro_op_resolver.AddMean();
-  // micro_op_resolver.AddFullyConnected();
-  // micro_op_resolver.AddSoftmax();
+  // setup knn
+  Serial.print("Starting setting up kNN");
+  for(int i=0;i<NUM_ORIENTATIONS_SAMPLES;i++) {
+    float initial_accel_data[3];
+    initial_accel_data[0]=ORIENTATIONS[i][0];
+    initial_accel_data[1]=ORIENTATIONS[i][1];
+    initial_accel_data[2]=ORIENTATIONS[i][2];
+    guard_knn.addExample(initial_accel_data, ORIENTATIONS[i][3]);
+  }
+  Serial.print("Finished setting up kNN");
 
-  // // Build an interpreter to run the model with.
-  // static tflite::MicroInterpreter static_interpreter(
-  //     model, micro_op_resolver, tensor_arena, kTensorArenaSize, error_reporter);
-  // interpreter = &static_interpreter;
+  // Pull in only the operation implementations we need.
+  // This relies on a complete list of all the ops needed by this graph.
+  // An easier approach is to just use the AllOpsResolver, but this will
+  // incur some penalty in code space for op implementations that are not
+  // needed by this graph.
+  static tflite::MicroMutableOpResolver<4> micro_op_resolver;  // NOLINT
+  micro_op_resolver.AddConv2D();
+  micro_op_resolver.AddMean();
+  micro_op_resolver.AddFullyConnected();
+  micro_op_resolver.AddSoftmax();
 
-  // // Allocate memory from the tensor_arena for the model's tensors.
-  // interpreter->AllocateTensors();
+  // Build an interpreter to run the model with.
+  static tflite::MicroInterpreter static_interpreter(
+      model, micro_op_resolver, tensor_arena, kTensorArenaSize, error_reporter);
+  interpreter = &static_interpreter;
 
-  // // Set model input settings
-  // TfLiteTensor* model_input = interpreter->input(0);
-  // if ((model_input->dims->size != 4) || (model_input->dims->data[0] != 1) ||
-  //     (model_input->dims->data[1] != raster_height) ||
-  //     (model_input->dims->data[2] != raster_width) ||
-  //     (model_input->dims->data[3] != raster_channels) ||
-  //     (model_input->type != kTfLiteInt8)) {
-  //   TF_LITE_REPORT_ERROR(error_reporter,
-  //                        "Bad input tensor parameters in model");
-  //   return;
-  // }
+  // Allocate memory from the tensor_arena for the model's tensors.
+  interpreter->AllocateTensors();
 
-  // // Set model output settings
-  // TfLiteTensor* model_output = interpreter->output(0);
-  // if ((model_output->dims->size != 2) || (model_output->dims->data[0] != 1) ||
-  //     (model_output->dims->data[1] != label_count) ||
-  //     (model_output->type != kTfLiteInt8)) {
-  //   TF_LITE_REPORT_ERROR(error_reporter,
-  //                        "Bad output tensor parameters in model");
-  //   return;
-  // }
+  // Set model input settings
+  TfLiteTensor* model_input = interpreter->input(0);
+  if ((model_input->dims->size != 4) || (model_input->dims->data[0] != 1) ||
+      (model_input->dims->data[1] != raster_height) ||
+      (model_input->dims->data[2] != raster_width) ||
+      (model_input->dims->data[3] != raster_channels) ||
+      (model_input->type != kTfLiteInt8)) {
+    TF_LITE_REPORT_ERROR(error_reporter,
+                         "Bad input tensor parameters in model");
+    return;
+  }
+
+  // Set model output settings
+  TfLiteTensor* model_output = interpreter->output(0);
+  if ((model_output->dims->size != 2) || (model_output->dims->data[0] != 1) ||
+      (model_output->dims->data[1] != label_count) ||
+      (model_output->type != kTfLiteInt8)) {
+    TF_LITE_REPORT_ERROR(error_reporter,
+                         "Bad output tensor parameters in model");
+    return;
+  }
 }
 
 void setLedPinValue(int pin, int value) {
@@ -308,6 +359,19 @@ void loop() {
 
     float acceleration[3] = { x, y, z };
 
+    current_orientation = guard_knn.classify(acceleration, 1); // K = 1
+
+    // print the classification out
+    if (current_orientation >= 1 && current_orientation <= NUM_BOARD_ORIENTATIONS) {
+      Serial.print("Predicted board orientation is: ");
+      Serial.println(BOARD_ORIENTATIONS[current_orientation]);
+      guardCharacteristic.writeValue((byte)current_orientation, sizeof(current_orientation));
+    } else {
+      Serial.println("Unknown board orientation! Did you train me?");
+    }
+    Serial.println();
+
+
     accelerationCharacteristic.writeValue(acceleration, sizeof(acceleration));
     if (found_logger) {
       String val = "accel,";
@@ -384,56 +448,57 @@ void loop() {
       }
     }
   }
-  // if (accelerometer_samples_read > 0) {
-  //   EstimateGravityDirection(current_gravity);
-  //   UpdateVelocity(accelerometer_samples_read, current_gravity);
-  // }
+  if (accelerometer_samples_read > 0) {
+    EstimateGravityDirection(current_gravity);
+    UpdateVelocity(accelerometer_samples_read, current_gravity);
+  }
 
-  // // Wait for a gesture to be done
-  // if (done_just_triggered) {
-  //   // Rasterize the gesture
-  //   RasterizeStroke(stroke_points, *stroke_transmit_length, 0.6f, 0.6f, raster_width, raster_height, raster_buffer);
-  //   for (int y = 0; y < raster_height; ++y) {
-  //     char line[raster_width + 1];
-  //     for (int x = 0; x < raster_width; ++x) {
-  //       const int8_t* pixel = &raster_buffer[(y * raster_width * raster_channels) + (x * raster_channels)];
-  //       const int8_t red = pixel[0];
-  //       const int8_t green = pixel[1];
-  //       const int8_t blue = pixel[2];
-  //       char output;
-  //       if ((red > -128) || (green > -128) || (blue > -128)) {
-  //         output = '#';
-  //       } else {
-  //         output = '.';
-  //       }
-  //       line[x] = output;
-  //     }
-  //     line[raster_width] = 0;
-  //     Serial.println(line);
-  //   }
+  // Wait for a gesture to be done
+  if (done_just_triggered) {
+    // Rasterize the gesture
+    RasterizeStroke(stroke_points, *stroke_transmit_length, 0.6f, 0.6f, raster_width, raster_height, raster_buffer);
+    for (int y = 0; y < raster_height; ++y) {
+      char line[raster_width + 1];
+      for (int x = 0; x < raster_width; ++x) {
+        const int8_t* pixel = &raster_buffer[(y * raster_width * raster_channels) + (x * raster_channels)];
+        const int8_t red = pixel[0];
+        const int8_t green = pixel[1];
+        const int8_t blue = pixel[2];
+        char output;
+        if ((red > -128) || (green > -128) || (blue > -128)) {
+          output = '#';
+        } else {
+          output = '.';
+        }
+        line[x] = output;
+      }
+      line[raster_width] = 0;
+      Serial.println(line);
+    }
 
-  //   // Pass to the model and run the interpreter
-  //   TfLiteTensor* model_input = interpreter->input(0);
-  //   for (int i = 0; i < raster_byte_count; ++i) {
-  //     model_input->data.int8[i] = raster_buffer[i];
-  //   }
-  //   TfLiteStatus invoke_status = interpreter->Invoke();
-  //   if (invoke_status != kTfLiteOk) {
-  //     TF_LITE_REPORT_ERROR(error_reporter, "Invoke failed");
-  //     return;
-  //   }
-  //   TfLiteTensor* output = interpreter->output(0);
+    // Pass to the model and run the interpreter
+    TfLiteTensor* model_input = interpreter->input(0);
+    for (int i = 0; i < raster_byte_count; ++i) {
+      model_input->data.int8[i] = raster_buffer[i];
+    }
+    TfLiteStatus invoke_status = interpreter->Invoke();
+    if (invoke_status != kTfLiteOk) {
+      TF_LITE_REPORT_ERROR(error_reporter, "Invoke failed");
+      return;
+    }
+    TfLiteTensor* output = interpreter->output(0);
 
-  //   // Parse the model output
-  //   int8_t max_score;
-  //   int max_index;
-  //   for (int i = 0; i < label_count; ++i) {
-  //     const int8_t score = output->data.int8[i];
-  //     if ((i == 0) || (score > max_score)) {
-  //       max_score = score;
-  //       max_index = i;
-  //     }
-  //   }
-  //   TF_LITE_REPORT_ERROR(error_reporter, "Found %s (%d)", labels[max_index], max_score);
-  // }
+    // Parse the model output
+    int8_t max_score;
+    int max_index;
+    for (int i = 0; i < label_count; ++i) {
+      const int8_t score = output->data.int8[i];
+      if ((i == 0) || (score > max_score)) {
+        max_score = score;
+        max_index = i;
+      }
+    }
+    punchTypeCharacteristic.writeValue((byte)max_index, sizeof(max_index));
+    TF_LITE_REPORT_ERROR(error_reporter, "Found %s (%d)", labels[max_index], max_score);
+  }
 }
